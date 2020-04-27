@@ -1,0 +1,97 @@
+#!/bin/bash
+#############################################################################
+# Reference URL to API 
+#   https://www.zaproxy.org/docs/api/?shell
+######################################################@@@@@##################
+#
+# Read API key
+api=$(cat \/opt\/zap\/zapkey)
+
+echo "Stopping and removing all existing Docker containers"
+docker stop $(docker ps -a -q) 2>/dev/null
+docker rm $(docker ps -a -q) 2>/dev/null
+
+# Launch the OWASP Docker container listening on localhost:8080
+docker run -u zap -p 8080:8080 -i owasp/zap2docker-stable zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true -config api.key=$api &
+
+# Check the status of the docker container and wait until fully loaded before scanning
+#   This status check ONLY works if no other containers are loaded and running
+while [[ $status != "running" ]]
+do
+	echo "Waiting for OWASP Docker container to fully load"
+	status=$(docker inspect --format="{{.State.Status}}" $(docker ps -q) 2>/dev/null)
+	sleep 10
+	# A 10 second delay is needed to allow ZAP to load once the container is running
+done
+echo "OWASP Docker container to loaded"
+
+# Note the "target_url_list.txt" file MUST NOT any new line carriage returns or the script will stop reading input.
+# Sample URL from Google's public test sever: https://public-firing-range.appspot.com/angular/index.html
+fileinput="/opt/zap/target_url_list.txt"
+while IFS= read -r url
+do	
+	if [[ -z "$url" ]]
+	then
+		echo "New line carriage return read from input file containing target URL list. Exiting script!"
+		exit 0
+	else
+		echo "============= Removing historical data ==============="
+		curl "http://localhost:8080/JSON/spider/action/removeAllScans/?&apikey=$api"
+		curl "http://localhost:8080/JSON/ascan/action/removeAllScans/?&apikey=$api"
+		curl "http://localhost:8080/JSON/alert/action/deleteAllAlerts/?&apikey=$api"
+		echo ""
+		
+		echo "============== Beginning Spider scan ================="
+		curl "http://localhost:8080/JSON/spider/action/scan/?&apikey=$api&url=$url&recurse=0"
+		echo ""
+		status=0
+		while [[ $status != 100 ]]
+		do
+			status=$(curl -s "http://localhost:8080/JSON/spider/view/status/?&apikey=$api")
+			echo "Spider scan percent complete: " $(echo $status | awk -F\" '{ print $4 }')
+			status=$(echo $status | awk -F\" '{ print $4 }')
+			sleep 2 
+			# Sleep timer needed to avoid too many calls to the ZAP API and cause a DOS
+		done
+		
+		echo "============ Beginning Ajax Spider scan =============="	
+		curl -s "http://localhost:8080/JSON/ajaxSpider/action/scan/?apikey=$api&url=$url&inScope=&contextName=&subtreeOnly="
+		echo ""
+		status=0
+		while [[ $status != "stopped" ]]
+		do
+			status=$(curl -s "http://localhost:8080/JSON/ajaxSpider/view/status/?apikey=$api")
+			echo "Ajax Spider scan status: " $(echo $status | awk -F\" '{ print $4 }')
+			status=$(echo $status | awk -F\" '{ print $4 }')
+			sleep 5	
+			# Sleep timer needed to avoid too many calls to the ZAP API and cause a DOS
+		done
+		
+		echo "=============== Beginning Active scan ================"
+		curl "http://localhost:8080/JSON/ascan/action/scan/?&apikey=$api&url=$url&recurse=0"
+		echo ""
+		status=0
+		while [[ $status != 100 ]]
+		do
+			status=$(curl -s "http://localhost:8080/JSON/ascan/view/status/?&apikey=$api")
+			echo "Active scan percent complete: " $(echo $status | awk -F\" '{ print $4 }')
+			status=$(echo $status | awk -F\" '{ print $4 }')
+			sleep 2	
+			# Sleep timer needed to avoid too many calls to the ZAP API and cause a DOS
+		done
+
+		# Read the $url variable and replace escape and special characters with dots
+		targeturl=$(echo $url | awk -F',' 'BEGIN {OFS=FS}{gsub(/\//,".",$1);print}' | awk -F',' 'BEGIN {OFS=FS}{gsub(/\:./,"",$1);print}')
+		timestamp=$(date +"%Y%m%d%H%M") 	# Timestate is formated Year-Month-Day-Hour-Min
+
+		# Generating HTML and XML reports from Active scan data
+		curl -s "http://localhost:8080/OTHER/core/other/htmlreport/?&apikey=$api" -o /opt/zap/results/${targeturl}_zapscan_${timestamp}.html
+		curl -s "http://localhost:8080/OTHER/core/other/xmlreport/?&apikey=$api" -o /opt/zap/results/${targeturl}_zapscan_${timestamp}.xml
+	fi
+done <"$fileinput"
+
+echo "Stopping and removing all Docker containers"
+docker stop $(docker ps -a -q) 2>/dev/null
+docker rm $(docker ps -a -q) 2>/dev/null
+
+exit 0

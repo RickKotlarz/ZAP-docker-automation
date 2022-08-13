@@ -4,7 +4,7 @@
 #   https://www.zaproxy.org/docs/api/?shell
 ######################################################@@@@@##################
 #
-# Read API key
+# Read API key from the zapkey file in /opt/zap/zapkey
 api=$(cat \/opt\/zap\/zapkey)
 
 echo "Stopping and removing all existing Docker containers"

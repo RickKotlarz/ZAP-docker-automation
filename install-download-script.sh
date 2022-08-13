@@ -3,7 +3,7 @@
 
 sudo su -
 
-# Older versions of Docker were called docker, docker.io, or docker-engine. If these are installed, uninstall them
+# Older versions of Docker were called docker, docker.io, or docker-engine. If these are installed, uninstall them before installing the latest
 apt-get remove docker docker-engine docker.io containerd runc
 
 # Update the apt package index:
